@@ -57,6 +57,17 @@ static __always_inline int vlan_tag_push(struct xdp_md *ctx,
 SEC("xdp_port_rewrite")
 int xdp_port_rewrite_func(struct xdp_md *ctx)
 {
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct hdr_cursor nh;
+	int nh_type;
+	nh.pos = data
+
+	struct ethhdr *eth;
+	nh_type = parse_ethhdr(&nh,data_end,&eth)
+	if (nh_type<9)
+		return XDP_PASS
+
 	return XDP_PASS;
 }
 
