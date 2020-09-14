@@ -172,7 +172,7 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 	__be16 inner_len;
 
 	if (eth->h_proto == bpf_htons(ETH_P_IP)){
-		inner_ipv4 = eth + 1;
+		inner_ipv4 = (void *)eth + 1;
 		inner_len = bpf_ntohs(inner_ipv4->tot_len);
 		srh_next_proto = IPPROTO_IPIP;
 	}else if (eth->h_proto == bpf_htons(ETH_P_IPV6))
