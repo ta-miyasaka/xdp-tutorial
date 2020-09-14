@@ -177,7 +177,7 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 		srh_next_proto = IPPROTO_IPIP;
 	}else if (eth->h_proto == bpf_htons(ETH_P_IPV6))
 	{
-		inner_ipv6 = eth + 1;
+		inner_ipv6 = (void *)eth + 1;
 		inner_len = bpf_ntohs(inner_ipv6->payload_len);
 		srh_next_proto = IPPROTO_IPV6;
 	}else
@@ -203,9 +203,9 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 	data_end = (void *)(long)ctx->data_end;
 	eth = data;
 
-	outer_ipv6 = eth + 1;
-	srh = outer_ipv6 + 1;
-	first_sid = srh + 1;
+	outer_ipv6 = (void *)eth + 1;
+	srh = (void *)outer_ipv6 + 1;
+	first_sid = (void *)srh + 1;
 
 	/* Copy the original ether header to the new SRv6 packet */
 	__builtin_memcpy(eth, &eth_cpy, sizeof(eth_cpy));
