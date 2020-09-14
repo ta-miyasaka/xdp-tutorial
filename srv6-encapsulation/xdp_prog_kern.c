@@ -1,8 +1,18 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/bpf.h>
 #include <linux/in.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <linux/if_vlan.h>
+#include <linux/ip.h>
+#include <linux/ipv6.h>
+#include <linux/seg6.h>
+#include <linux/seg6_local.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_endian.h>
+
+// net/ipv6.h
+#define NEXTHDR_ROUTING		43	/* Routing header. */
 
 // The parsing helper functions from the packet01 lesson have moved here
 #include "../common/parsing_helpers.h"
@@ -128,6 +138,101 @@ int xdp_vlan_swap_func(struct xdp_md *ctx)
 	return XDP_PASS;
 }
 
+/* SRv6 Encapsulation */
+static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr *eth)
+{
+	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(long)ctx->data_end;
+	struct ethhdr eth_cpy;
+	struct ipv6hdr *inner_ipv6;
+	struct iphdr *inner_ipv4;
+	struct ipv6hdr *outer_ipv6;
+	struct ipv6_sr_hdr *srh;
+	struct in6_addr *first_sid;
+
+	struct in6_addr outer_src_ipv6 = {
+		.in6_u = {
+			.u6_addr8 = {
+			0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			}
+		}
+	};
+	struct in6_addr outer_dst_ipv6 = {
+		.in6_u = {
+			.u6_addr8 = {
+			0x20, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+			}
+		}
+	};
+
+	__u8 srh_next_proto;
+	__u8 srh_len;
+	__be16 inner_len;
+
+	if (eth->h_proto == bpf_htons(ETH_P_IP)){
+		inner_ipv4 = eth + 1;
+		inner_len = bpf_ntohs(inner_ipv4->tot_len);
+		srh_next_proto = IPPROTO_IPIP;
+	}else if (eth->h_proto == bpf_htons(ETH_P_IPV6))
+	{
+		inner_ipv6 = eth + 1;
+		inner_len = bpf_ntohs(inner_ipv6->payload_len);
+		srh_next_proto = IPPROTO_IPV6;
+	}else
+	{
+		return -1;
+	}
+
+	/* First copy the original Ethernet header */
+	__builtin_memcpy(&eth_cpy, eth, sizeof(eth_cpy));
+
+	// Add the SRv6 encapsulation field
+	// In this implementation only support one SID contained in SRH
+	srh_len = sizeof(struct ipv6_sr_hdr) + sizeof(struct in6_addr) * 1;
+
+	if(bpf_xdp_adjust_head(ctx, 0 - (int)(sizeof(struct ip6hdr)+srh_len))
+		return -1;
+
+	/* Need to re-evaluate data_end and data after head adjustment, and
+	 * bounds check, even though we know there is enough space (as we
+	 * increased it).
+	 */
+	data = (void *)(long)ctx->data;
+	data_end = (void *)(long)ctx->data_end;
+	eth = data;
+
+	outer_ipv6 = eth + 1;
+	srh = outer_ipv6 + 1;
+	first_sid = srh + 1;
+
+	/* Copy the original ether header to the new SRv6 packet */
+	__builtin_memcpy(eth, &eth_cpy, sizeof(eth_cpy));
+	eth->h_proto = bpf_htons(ETH_P_IPV6);
+
+	/* Create the outer IPv6 header */
+	outer_ipv6->version = 6;
+	outer_ipv6->priority = 0;
+	outer_ipv6->nexthdr = NEXTHDR_ROUTING;
+	outer_ipv6->hop_limit = 64;
+	outer_ipv6->payload_len = bpf_htons(srh_len + inner_len);
+	outer_ipv6->daaddr = outer_dst_ipv6;
+	outer_ipv6->saaddr = outer_src_ipv6;
+
+	/* Create the SRH */
+	srh->nexthdr = srh_next_proto;
+	srh->hdrlen = (srh_len / 8 - 1);
+	srh->type = 4;
+	srh->segments_left = 0;
+	srh->first_segment = 0;
+	srh->flags = 0;
+
+	__builtin_memcpy(first_sid, &outer_dst_ipv6, sizeof(struct in6_addr));
+	
+	return 0;
+}
+
 /* Solution to the parsing exercise in lesson packet01. Handles VLANs and legacy
  * IP (via the helpers in parsing_helpers.h).
  */
@@ -170,6 +275,62 @@ int  xdp_parser_func(struct xdp_md *ctx)
 
 		if (bpf_ntohs(icmp6h->icmp6_sequence) % 2 == 0)
 			action = XDP_DROP;
+
+	} else if (nh_type == bpf_htons(ETH_P_IP)) {
+		struct iphdr *iph;
+		struct icmphdr *icmph;
+
+		nh_type = parse_iphdr(&nh, data_end, &iph);
+		if (nh_type != IPPROTO_ICMP)
+			goto out;
+
+		nh_type = parse_icmphdr(&nh, data_end, &icmph);
+		if (nh_type != ICMP_ECHO)
+			goto out;
+
+		if (bpf_ntohs(icmph->un.echo.sequence) % 2 == 0)
+			action = XDP_DROP;
+	}
+ out:
+	return xdp_stats_record_action(ctx, action);
+}
+
+/* Solution to the parsing exercise in lesson packet01. Handles VLANs and legacy
+ * IP (via the helpers in parsing_helpers.h).
+ */
+SEC("srv6_encapsulation")
+int  xdp_srv6_encapsulation(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+
+	/* Default action XDP_PASS, imply everything we couldn't parse, or that
+	 * we don't want to deal with, we just pass up the stack and let the
+	 * kernel deal with it.
+	 */
+	__u32 action = XDP_PASS; /* Default action */
+
+	/* These keep track of the next header type and iterator pointer */
+	struct hdr_cursor nh;
+	int nh_type;
+	nh.pos = data;
+
+	struct ethhdr *eth;
+
+	/* Packet parsing in steps: Get each header one at a time, aborting if
+	 * parsing fails. Each helper function does sanity checking (is the
+	 * header type in the packet correct?), and bounds checking.
+	 */
+	nh_type = parse_ethhdr(&nh, data_end, &eth);
+
+	if (nh_type == bpf_htons(ETH_P_IPV6)) {
+		struct ipv6hdr *ip6h;
+		struct icmp6hdr *icmp6h;
+
+		if (srv6_encapsulation(ctx,eth)<0) {
+			action = XDP_DROP;
+			goto out;
+		}
 
 	} else if (nh_type == bpf_htons(ETH_P_IP)) {
 		struct iphdr *iph;
