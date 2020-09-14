@@ -325,9 +325,6 @@ int  xdp_srv6_encapsulation(struct xdp_md *ctx)
 	nh_type = parse_ethhdr(&nh, data_end, &eth);
 
 	if (nh_type == bpf_htons(ETH_P_IPV6)) {
-		struct ipv6hdr *ip6h;
-		struct icmp6hdr *icmp6h;
-
 		if (srv6_encapsulation(ctx,eth)<0) {
 			action = XDP_DROP;
 			goto out;
