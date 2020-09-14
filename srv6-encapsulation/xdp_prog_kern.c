@@ -192,7 +192,7 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 	// In this implementation only support one SID contained in SRH
 	srh_len = sizeof(struct ipv6_sr_hdr) + sizeof(struct in6_addr) * 1;
 
-	if(bpf_xdp_adjust_head(ctx, 0 - (int)(sizeof(struct ip6hdr)+srh_len))
+	if(bpf_xdp_adjust_head(ctx, 0 - (int)(sizeof(struct ipv6hdr)+srh_len))
 		return -1;
 
 	/* Need to re-evaluate data_end and data after head adjustment, and
@@ -217,8 +217,8 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 	outer_ipv6->nexthdr = NEXTHDR_ROUTING;
 	outer_ipv6->hop_limit = 64;
 	outer_ipv6->payload_len = bpf_htons(srh_len + inner_len);
-	outer_ipv6->daaddr = outer_dst_ipv6;
-	outer_ipv6->saaddr = outer_src_ipv6;
+	outer_ipv6->daddr = outer_dst_ipv6;
+	outer_ipv6->saddr = outer_src_ipv6;
 
 	/* Create the SRH */
 	srh->nexthdr = srh_next_proto;
