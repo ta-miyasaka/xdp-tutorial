@@ -192,8 +192,9 @@ static __always_inline int srv6_encapsulation(struct xdp_md *ctx, struct ethhdr 
 	// In this implementation only support one SID contained in SRH
 	srh_len = sizeof(struct ipv6_sr_hdr) + sizeof(struct in6_addr) * 1;
 
-	if(bpf_xdp_adjust_head(ctx, 0 - (int)(sizeof(struct ipv6hdr)+srh_len))
+	if(bpf_xdp_adjust_head(ctx, 0 - (int)(sizeof(struct ipv6hdr)+srh_len)){
 		return -1;
+	}
 
 	/* Need to re-evaluate data_end and data after head adjustment, and
 	 * bounds check, even though we know there is enough space (as we
